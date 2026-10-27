@@ -13,6 +13,16 @@ if CommandLine.arguments.contains("--status") {
             print("title:   \(UsageFormatter.menuBarTitle(snapshot))")
             print("session: \(UsageFormatter.sessionLine(snapshot))")
             print("weekly:  \(UsageFormatter.weeklyLine(snapshot))")
+            if let data = try? Data(contentsOf: CodexCredentials.defaultFileURL()),
+               let credentials = CodexCredentials.parse(from: data) {
+                do {
+                    let codex = try await CodexUsageClient().fetchUsage(credentials: credentials)
+                    print("chatgpt session: \(UsageFormatter.sessionLine(codex))")
+                    print("chatgpt weekly:  \(UsageFormatter.weeklyLine(codex))")
+                } catch {
+                    print("chatgpt error: \(error)")
+                }
+            }
             exit(0)
         } catch {
             print("error: \(error)")

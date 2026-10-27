@@ -1,14 +1,14 @@
 import AppKit
 
-/// Compact menu bar content: a progress icon on the left (outer ring = 5-hour
-/// session, inner pie = weekly) and the two percentages stacked on the right
-/// (session on top, weekly below).
+/// Compact menu bar content: one gauge per provider (Claude, then ChatGPT/Codex),
+/// each a progress icon (outer ring = 5-hour session, inner pie = weekly) with the
+/// two percentages stacked to its right (session on top, weekly below).
 ///
 /// Lives inside the status item's button and draws with the button's effective
 /// appearance, so `labelColor` follows the menu bar's light/dark tint. It ignores
 /// mouse events so clicks still reach the button and open the menu.
 final class StatusBarView: NSView {
-    struct Content {
+    struct Gauge {
         /// 0–100+ utilization, nil when there's no data yet.
         var session: Double?
         var weekly: Double?
@@ -16,6 +16,10 @@ final class StatusBarView: NSView {
         var weeklyRingColor: NSColor = .labelColor
         var sessionTextColor: NSColor = .labelColor
         var weeklyTextColor: NSColor = .labelColor
+    }
+
+    struct Content {
+        var gauges: [Gauge] = [Gauge()]
     }
 
     var content = Content() {
@@ -26,6 +30,7 @@ final class StatusBarView: NSView {
     private let ringWidth: CGFloat = 2
     private let spacing: CGFloat = 4
     private let padding: CGFloat = 4
+    private let gaugeSpacing: CGFloat = 6
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
 
     /// Width of the text column, sized for the widest value ("100%") so the item
@@ -34,9 +39,12 @@ final class StatusBarView: NSView {
         ceil(("100%" as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    /// Total width the status item needs.
+    private var gaugeWidth: CGFloat { iconSize + spacing + textWidth }
+
+    /// Total width the status item needs for the current number of gauges.
     var preferredWidth: CGFloat {
-        padding + iconSize + spacing + textWidth + padding
+        let count = CGFloat(max(content.gauges.count, 1))
+        return padding + count * gaugeWidth + (count - 1) * gaugeSpacing + padding
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -49,32 +57,35 @@ final class StatusBarView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         // Resolve dynamic colors (labelColor) against the menu bar's appearance.
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            drawIcon()
-            drawText()
+            for (index, gauge) in content.gauges.enumerated() {
+                let x = padding + CGFloat(index) * (gaugeWidth + gaugeSpacing)
+                drawIcon(gauge, x: x)
+                drawText(gauge, x: x + iconSize + spacing)
+            }
         }
     }
 
     // MARK: - Icon
 
-    private func drawIcon() {
-        let center = NSPoint(x: padding + iconSize / 2, y: bounds.midY)
+    private func drawIcon(_ gauge: Gauge, x: CGFloat) {
+        let center = NSPoint(x: x + iconSize / 2, y: bounds.midY)
 
         // Outer ring: session.
         let ringRadius = (iconSize - ringWidth) / 2
         let track = NSBezierPath()
         track.appendArc(withCenter: center, radius: ringRadius, startAngle: 0, endAngle: 360)
         track.lineWidth = ringWidth
-        content.sessionRingColor.withAlphaComponent(0.25).setStroke()
+        gauge.sessionRingColor.withAlphaComponent(0.25).setStroke()
         track.stroke()
 
-        let sessionFraction = fraction(content.session)
+        let sessionFraction = fraction(gauge.session)
         if sessionFraction > 0 {
             let arc = NSBezierPath()
             arc.appendArc(withCenter: center, radius: ringRadius,
                           startAngle: 90, endAngle: 90 - 360 * sessionFraction, clockwise: true)
             arc.lineWidth = ringWidth
             arc.lineCapStyle = sessionFraction < 1 ? .round : .butt
-            content.sessionRingColor.setStroke()
+            gauge.sessionRingColor.setStroke()
             arc.stroke()
         }
 
@@ -82,12 +93,12 @@ final class StatusBarView: NSView {
         let pieRadius = ringRadius - ringWidth / 2 - 1.5
         let disc = NSBezierPath(ovalIn: NSRect(x: center.x - pieRadius, y: center.y - pieRadius,
                                                width: pieRadius * 2, height: pieRadius * 2))
-        content.weeklyRingColor.withAlphaComponent(0.25).setFill()
+        gauge.weeklyRingColor.withAlphaComponent(0.25).setFill()
         disc.fill()
 
-        let weeklyFraction = fraction(content.weekly)
+        let weeklyFraction = fraction(gauge.weekly)
         if weeklyFraction >= 1 {
-            content.weeklyRingColor.setFill()
+            gauge.weeklyRingColor.setFill()
             disc.fill()
         } else if weeklyFraction > 0 {
             let wedge = NSBezierPath()
@@ -95,7 +106,7 @@ final class StatusBarView: NSView {
             wedge.appendArc(withCenter: center, radius: pieRadius,
                             startAngle: 90, endAngle: 90 - 360 * weeklyFraction, clockwise: true)
             wedge.close()
-            content.weeklyRingColor.setFill()
+            gauge.weeklyRingColor.setFill()
             wedge.fill()
         }
     }
@@ -106,15 +117,14 @@ final class StatusBarView: NSView {
 
     // MARK: - Text
 
-    private func drawText() {
-        let x = padding + iconSize + spacing
+    private func drawText(_ gauge: Gauge, x: CGFloat) {
         let lineHeight = ceil(font.ascender - font.descender)
         // Two lines centered vertically, nudged together slightly to fit 22pt bars.
         let overlap: CGFloat = 1
         let top = bounds.midY + lineHeight - overlap / 2
-        draw(percent(content.session), color: content.sessionTextColor,
+        draw(percent(gauge.session), color: gauge.sessionTextColor,
              in: NSRect(x: x, y: top - lineHeight, width: textWidth, height: lineHeight))
-        draw(percent(content.weekly), color: content.weeklyTextColor,
+        draw(percent(gauge.weekly), color: gauge.weeklyTextColor,
              in: NSRect(x: x, y: top - 2 * lineHeight + overlap, width: textWidth, height: lineHeight))
     }
 
