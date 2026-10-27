@@ -109,6 +109,17 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            Section("ChatGPT / Codex") {
+                Toggle("Show ChatGPT usage in the menu bar", isOn: $prefs.showCodex)
+                    .onChange(of: prefs.showCodex) { onPrefsChanged() }
+                LabeledContent("Status", value: state.codexConnectionDescription)
+                if let err = state.codexError {
+                    LabeledContent("Last error") { Text(err).foregroundStyle(.secondary) }
+                }
+                Text("Reads the Codex CLI's login (~/.codex/auth.json) read-only. Install Codex and run `codex login` with your ChatGPT account to connect.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

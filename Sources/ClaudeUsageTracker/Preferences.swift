@@ -34,12 +34,18 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(launchAtLogin, forKey: "launchAtLogin") }
     }
 
+    /// Show a second gauge for ChatGPT/Codex usage when the Codex CLI is logged in.
+    @Published var showCodex: Bool {
+        didSet { defaults.set(showCodex, forKey: "showCodex") }
+    }
+
     private init() {
         thresholdsEnabled = defaults.object(forKey: "thresholdsEnabled") as? Bool ?? true
         sessionColorHex = defaults.string(forKey: "sessionColorHex") ?? ""
         weeklyColorHex = defaults.string(forKey: "weeklyColorHex") ?? ""
         refreshMinutes = max(1, defaults.object(forKey: "refreshMinutes") as? Int ?? 5)
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
+        showCodex = defaults.object(forKey: "showCodex") as? Bool ?? true
     }
 
     var refreshInterval: TimeInterval { TimeInterval(refreshMinutes * 60) }

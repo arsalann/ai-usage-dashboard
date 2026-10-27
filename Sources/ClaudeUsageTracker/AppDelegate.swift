@@ -9,12 +9,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private let state = AppState()
     private let auth = AuthManager()
     private let client = UsageClient()
+    private let codexClient = CodexUsageClient()
     private let history = UsageHistoryStore()
 
     private var statusItem: NSStatusItem!
     private let statusView = StatusBarView()
     private var sessionItem: NSMenuItem!
     private var weeklyItem: NSMenuItem!
+    private var claudeHeaderItem: NSMenuItem!
+    private var codexHeaderItem: NSMenuItem!
+    private var codexSessionItem: NSMenuItem!
+    private var codexWeeklyItem: NSMenuItem!
     private var settingsWindow: NSWindow?
     private var statsWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
@@ -50,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 DispatchQueue.main.async {
                     self.render()
                     self.applyLaunchAtLogin(self.prefs.launchAtLogin)
+                    if self.prefs.showCodex && self.state.codexSnapshot == nil { self.refreshCodex() }
                 }
             }
             .store(in: &cancellables)
@@ -84,12 +90,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.autoenablesItems = false
         menu.delegate = self
 
+        claudeHeaderItem = NSMenuItem.sectionHeader(title: "Claude")
         sessionItem = NSMenuItem(title: "Loading…", action: nil, keyEquivalent: "")
         weeklyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        sessionItem.isEnabled = false
-        weeklyItem.isEnabled = false
-        menu.addItem(sessionItem)
-        menu.addItem(weeklyItem)
+        codexHeaderItem = NSMenuItem.sectionHeader(title: "ChatGPT")
+        codexSessionItem = NSMenuItem(title: "Loading…", action: nil, keyEquivalent: "")
+        codexWeeklyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        for item in [claudeHeaderItem!, sessionItem!, weeklyItem!,
+                     codexHeaderItem!, codexSessionItem!, codexWeeklyItem!] {
+            item.isEnabled = false
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
 
         add(menu, "Stats…", #selector(openStats), key: "s")
@@ -117,7 +128,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             sessionItem.title = statusLineWhenNoData()
             weeklyItem.title = ""
         }
+
+        let codexVisible = showsCodex
+        claudeHeaderItem.isHidden = !codexVisible
+        for item in [codexHeaderItem!, codexSessionItem!, codexWeeklyItem!] { item.isHidden = !codexVisible }
+        if let snapshot = state.codexSnapshot {
+            codexSessionItem.title = "Session   " + UsageFormatter.sessionLine(snapshot)
+            codexWeeklyItem.title  = "Weekly    " + UsageFormatter.weeklyLine(snapshot)
+            codexWeeklyItem.isHidden = !codexVisible
+        } else {
+            codexSessionItem.title = state.codexError ?? "Loading…"
+            codexWeeklyItem.isHidden = true
+        }
     }
+
+    /// The ChatGPT gauge shows when enabled and the Codex CLI is logged in.
+    private var showsCodex: Bool { prefs.showCodex && state.codexConnected }
 
     private func statusLineWhenNoData() -> String {
         switch auth.source {
@@ -128,12 +154,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Updates the ring/pie icon and stacked percentages in the menu bar.
     private func renderStatusItem(_ snapshot: UsageSnapshot?) {
+        var gauges = [gauge(for: snapshot)]
+        var tooltip = snapshot.map { "Claude " + UsageFormatter.menuBarTitle($0) }
+        if showsCodex {
+            gauges.append(gauge(for: state.codexSnapshot))
+            if let codex = state.codexSnapshot {
+                tooltip = [tooltip, "ChatGPT " + UsageFormatter.menuBarTitle(codex)]
+                    .compactMap { $0 }.joined(separator: " · ")
+            }
+        }
+        statusView.content = StatusBarView.Content(gauges: gauges)
+        statusItem.length = statusView.preferredWidth
+        statusItem.button?.toolTip = tooltip
+    }
+
+    private func gauge(for snapshot: UsageSnapshot?) -> StatusBarView.Gauge {
         let session = snapshot?.session?.utilization
         let weekly = snapshot?.weekly?.utilization
         let sessionLevel = UsageLevel(utilization: session, thresholdsEnabled: prefs.thresholdsEnabled)
         let weeklyLevel = UsageLevel(utilization: weekly, thresholdsEnabled: prefs.thresholdsEnabled)
         let hasData = snapshot != nil
-        statusView.content = StatusBarView.Content(
+        return StatusBarView.Gauge(
             session: hasData ? (session ?? 0) : nil,
             weekly: hasData ? (weekly ?? 0) : nil,
             sessionRingColor: AppColors.ringColor(level: sessionLevel, warning: AppColors.sessionWarning),
@@ -143,7 +184,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             weeklyTextColor: AppColors.color(level: weeklyLevel, warning: AppColors.weeklyWarning,
                                              customHex: prefs.weeklyColorHex)
         )
-        statusItem.button?.toolTip = hasData ? UsageFormatter.menuBarTitle(snapshot) : nil
     }
 
     /// Refresh the cached source/line text when the menu is about to show.
@@ -161,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func refresh() {
+        refreshCodex()
         state.isRefreshing = true
         Task { [weak self] in
             guard let self else { return }
@@ -171,6 +212,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             } catch {
                 await MainActor.run { self.onFailure(error) }
             }
+        }
+    }
+
+    /// Fetches ChatGPT/Codex usage alongside Claude's, on the same cadence. Failures
+    /// are shown in the menu but don't affect Claude polling or backoff.
+    private func refreshCodex() {
+        guard prefs.showCodex else { return }
+        let credentials = (try? Data(contentsOf: CodexCredentials.defaultFileURL()))
+            .flatMap(CodexCredentials.parse)
+        state.codexConnected = credentials != nil
+        guard let credentials else {
+            state.codexSnapshot = nil
+            render()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let snapshot = try await self.codexClient.fetchUsage(credentials: credentials)
+                await MainActor.run {
+                    self.state.codexSnapshot = snapshot
+                    self.state.codexError = nil
+                    self.render()
+                }
+            } catch {
+                AppLog.log("Codex usage refresh failed: \(error)")
+                await MainActor.run {
+                    self.state.codexError = self.friendlyCodexError(error)
+                    self.render()
+                }
+            }
+        }
+    }
+
+    private func friendlyCodexError(_ error: Error) -> String {
+        switch error {
+        case UsageClientError.unauthorized: return "Codex login expired — run `codex` to refresh it"
+        case UsageClientError.rateLimited: return "Rate limited — will retry"
+        default: return "\(error)"
         }
     }
 

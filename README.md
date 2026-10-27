@@ -153,6 +153,19 @@ The app needs a Claude token to read usage. It tries, in order:
 > Anthropic's terms. The Claude Code fallback keeps the app working even if the
 > login flow stops working. Use at your own discretion.
 
+## ChatGPT / Codex usage
+
+If the [Codex CLI](https://github.com/openai/codex) is installed and logged in with
+a ChatGPT plan (Plus, Pro, …), a **second gauge** appears to the right of Claude's
+with the same layout: outer ring = Codex's 5-hour window, inner pie = its weekly
+limit. The menu gets a **ChatGPT** section with both reset times.
+
+The app reads `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`) **read-only** and
+calls the same `chatgpt.com/backend-api/wham/usage` endpoint the CLI's `/status`
+uses. It never refreshes Codex's token — Codex rotates it on use, so if it expires
+just run `codex` once. API-key logins have no usage windows and are ignored.
+Turn the gauge off in **Settings → Account → ChatGPT / Codex**.
+
 ## Settings
 
 Settings open in a window with a permanent left sidebar for navigating between
@@ -160,7 +173,7 @@ sections.
 
 | Section | Options |
 |---------|---------|
-| **Account** | Connection status, last refreshed time, last error, Log in / Log out |
+| **Account** | Connection status, last refreshed time, last error, Log in / Log out, ChatGPT/Codex gauge toggle |
 | **Appearance** | Threshold highlighting (session orange / weekly yellow ≥80%, red ≥100%), custom colors for session & weekly % |
 | **General** | Launch at login, refresh interval (1–15 min), Refresh now |
 | **Data** | Manual entry (backfill a reading at a chosen time), Reset charts |
